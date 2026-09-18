@@ -1,0 +1,467 @@
+import React, { useState } from 'react';
+import { 
+  Copy, 
+  Check, 
+  Download, 
+  Code, 
+  FileCode, 
+  Layers, 
+  ExternalLink, 
+  Info,
+  Sparkles,
+  Link as LinkIcon,
+  Globe,
+  Settings,
+  Share2
+} from 'lucide-react';
+import { FaqConfig } from '../../types';
+import { 
+  generateWidgetSnippet, 
+  generateFullHtmlDocument, 
+  generateIframeEmbedCode,
+  generateCanvaEmbedUrl,
+  encodeConfigToBase64
+} from '../../utils/exportGenerator';
+
+interface ExportPanelProps {
+  config: FaqConfig;
+  onExportJson: () => void;
+  onImportJsonClick: () => void;
+}
+
+type CodeTab = 'canva' | 'widget' | 'full' | 'iframe' | 'json';
+
+export const ExportPanel: React.FC<ExportPanelProps> = ({
+  config,
+  onExportJson,
+  onImportJsonClick,
+}) => {
+  const [activeTab, setActiveTab] = useState<CodeTab>('canva');
+  const [copiedType, setCopiedType] = useState<string | null>(null);
+  const [baseUrlOption, setBaseUrlOption] = useState<'github' | 'current' | 'custom'>('github');
+  const [customBaseUrl, setCustomBaseUrl] = useState<string>('https://vegipapafood-maker.github.io/ifs-faq-widget/');
+
+  const DEFAULT_PAGES_URL = 'https://vegipapafood-maker.github.io/ifs-faq-widget/';
+
+  // Compute base URL
+  const currentOriginUrl = typeof window !== 'undefined' 
+    ? `${window.location.origin}${window.location.pathname}` 
+    : DEFAULT_PAGES_URL;
+  
+  const effectiveBaseUrl = 
+    baseUrlOption === 'github' 
+      ? DEFAULT_PAGES_URL 
+      : baseUrlOption === 'current' 
+      ? currentOriginUrl 
+      : customBaseUrl.trim() || DEFAULT_PAGES_URL;
+
+  const canvaEmbedUrl = generateCanvaEmbedUrl(config, effectiveBaseUrl);
+  const base64Payload = encodeConfigToBase64(config);
+  const widgetSnippet = generateWidgetSnippet(config);
+  const fullHtml = generateFullHtmlDocument(config);
+  const iframeCode = generateIframeEmbedCode(config);
+  const jsonString = JSON.stringify(config, null, 2);
+
+  const handleCopy = async (text: string, type: string) => {
+    try {
+      await navigator.clipboard.writeText(text);
+      setCopiedType(type);
+      setTimeout(() => setCopiedType(null), 2500);
+    } catch (err) {
+      console.error('Failed to copy', err);
+    }
+  };
+
+  const handleDownloadHtml = () => {
+    const blob = new Blob([fullHtml], { type: 'text/html;charset=utf-8' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'faq-accordion.html';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+    URL.revokeObjectURL(url);
+  };
+
+  const handleTestLink = () => {
+    window.open(canvaEmbedUrl, '_blank', 'noopener,noreferrer');
+  };
+
+  return (
+    <div className="space-y-6">
+      {/* SECTION 1: Automated Canva Embed URL Link (Prominent Feature) */}
+      <div className="bg-gradient-to-br from-indigo-900 via-slate-900 to-slate-950 text-white p-6 sm:p-7 rounded-2xl border border-indigo-500/30 shadow-xl space-y-5">
+        <div className="flex flex-col md:flex-row md:items-center justify-between gap-4">
+          <div className="space-y-1">
+            <div className="flex items-center gap-2">
+              <span className="px-2.5 py-0.5 rounded-full text-[11px] font-semibold tracking-wide bg-indigo-500/30 text-indigo-200 border border-indigo-400/30 uppercase">
+                Automated Canva Link Export
+              </span>
+              <span className="px-2 py-0.5 rounded-full text-[10px] font-medium bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+                Zero API Keys Required
+              </span>
+            </div>
+            <h3 className="text-lg sm:text-xl font-bold text-white tracking-tight">
+              Canva-Ready URL Embed Link
+            </h3>
+            <p className="text-xs sm:text-sm text-slate-300 max-w-2xl leading-relaxed">
+              All styles, typography, and {config.items.length} FAQ questions are automatically minified and encoded into a self-contained Base64 URL token parameter.
+            </p>
+          </div>
+
+          <div className="shrink-0 flex items-center gap-2">
+            <button
+              type="button"
+              id="get-canva-link-btn"
+              onClick={() => handleCopy(canvaEmbedUrl, 'canva-hero')}
+              className="inline-flex items-center gap-2 px-5 py-3 rounded-xl bg-indigo-500 hover:bg-indigo-600 text-white font-semibold text-xs sm:text-sm transition-all shadow-lg hover:shadow-indigo-500/25 cursor-pointer active:scale-98"
+            >
+              {copiedType === 'canva-hero' ? (
+                <>
+                  <Check className="w-4 h-4 text-emerald-300" />
+                  <span>Link Copied!</span>
+                </>
+              ) : (
+                <>
+                  <Share2 className="w-4 h-4" />
+                  <span>Get Canva Embed Link</span>
+                </>
+              )}
+            </button>
+          </div>
+        </div>
+
+        {/* Base URL selector & Customization controls */}
+        <div className="bg-slate-800/80 p-3.5 rounded-xl border border-slate-700/80 flex flex-col sm:flex-row items-start sm:items-center justify-between gap-3 text-xs">
+          <div className="flex items-center gap-2 text-slate-300">
+            <Globe className="w-4 h-4 text-indigo-400 shrink-0" />
+            <span className="font-medium text-slate-200">Base URL Target:</span>
+          </div>
+
+          <div className="flex flex-wrap items-center gap-1.5 w-full sm:w-auto">
+            <button
+              type="button"
+              onClick={() => setBaseUrlOption('github')}
+              className={`px-2.5 py-1 rounded-lg transition-colors font-mono text-[11px] ${
+                baseUrlOption === 'github'
+                  ? 'bg-indigo-600 text-white font-semibold'
+                  : 'bg-slate-900/80 text-slate-400 hover:text-slate-200'
+              }`}
+              title="https://vegipapafood-maker.github.io/ifs-faq-widget/"
+            >
+              GitHub Pages (vegipapafood-maker)
+            </button>
+            <button
+              type="button"
+              onClick={() => setBaseUrlOption('current')}
+              className={`px-2.5 py-1 rounded-lg transition-colors text-[11px] ${
+                baseUrlOption === 'current'
+                  ? 'bg-indigo-600 text-white font-semibold'
+                  : 'bg-slate-900/80 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Current Domain
+            </button>
+            <button
+              type="button"
+              onClick={() => setBaseUrlOption('custom')}
+              className={`px-2.5 py-1 rounded-lg transition-colors text-[11px] ${
+                baseUrlOption === 'custom'
+                  ? 'bg-indigo-600 text-white font-semibold'
+                  : 'bg-slate-900/80 text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Custom
+            </button>
+          </div>
+        </div>
+
+        {baseUrlOption === 'custom' && (
+          <div className="pt-1">
+            <input
+              type="url"
+              value={customBaseUrl}
+              onChange={(e) => setCustomBaseUrl(e.target.value)}
+              placeholder="https://vegipapafood-maker.github.io/ifs-faq-widget/"
+              className="w-full bg-slate-900 border border-slate-700 rounded-lg px-3 py-2 text-xs text-slate-200 focus:outline-hidden focus:border-indigo-500 font-mono"
+            />
+          </div>
+        )}
+
+        {/* Read-Only Generated URL Link Display */}
+        <div className="space-y-1.5">
+          <div className="flex items-center justify-between text-[11px] text-slate-400">
+            <span>Generated URL Link:</span>
+            <span className="font-mono text-[10px] text-indigo-300">
+              Payload: {base64Payload.length.toLocaleString()} Base64 chars
+            </span>
+          </div>
+
+          <div className="flex items-center gap-2 bg-slate-950/90 border border-slate-800 rounded-xl p-2 sm:p-2.5">
+            <input
+              type="text"
+              readOnly
+              value={canvaEmbedUrl}
+              className="bg-transparent border-none text-xs font-mono text-slate-300 flex-1 select-all focus:outline-hidden overflow-ellipsis px-2"
+            />
+
+            <button
+              type="button"
+              onClick={() => handleCopy(canvaEmbedUrl, 'url-input')}
+              className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-medium transition-colors shrink-0 shadow-xs cursor-pointer"
+            >
+              {copiedType === 'url-input' ? (
+                <>
+                  <Check className="w-3.5 h-3.5 text-emerald-300" />
+                  <span>Copied</span>
+                </>
+              ) : (
+                <>
+                  <Copy className="w-3.5 h-3.5" />
+                  <span>Copy</span>
+                </>
+              )}
+            </button>
+
+            <button
+              type="button"
+              onClick={handleTestLink}
+              className="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition-colors shrink-0"
+              title="Open generated link in new tab to test"
+            >
+              <ExternalLink className="w-3.5 h-3.5" />
+              <span className="hidden sm:inline">Test Link</span>
+            </button>
+          </div>
+        </div>
+
+        {/* 4-Step Canva Embedding Instruction Block */}
+        <div className="bg-indigo-950/60 border border-indigo-500/20 rounded-xl p-4 space-y-3">
+          <h4 className="text-xs font-bold text-indigo-200 uppercase tracking-wider flex items-center gap-1.5">
+            <Sparkles className="w-3.5 h-3.5 text-amber-400" />
+            How to Embed in Canva Websites:
+          </h4>
+
+          <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3 text-xs">
+            <div className="bg-slate-900/70 p-3 rounded-lg border border-slate-800 space-y-1">
+              <div className="w-5 h-5 rounded-full bg-indigo-600 text-white flex items-center justify-center text-[10px] font-bold">
+                1
+              </div>
+              <p className="font-semibold text-slate-200">Copy the URL</p>
+              <p className="text-[11px] text-slate-400">
+                Click <strong>Get Canva Embed Link</strong> above to copy your encoded URL.
+              </p>
+            </div>
+
+            <div className="bg-slate-900/70 p-3 rounded-lg border border-slate-800 space-y-1">
+              <div className="w-5 h-5 rounded-full bg-indigo-600 text-white flex items-center justify-center text-[10px] font-bold">
+                2
+              </div>
+              <p className="font-semibold text-slate-200">Open Canva Apps</p>
+              <p className="text-[11px] text-slate-400">
+                In your Canva Website design, click <strong>Apps</strong> on the left panel.
+              </p>
+            </div>
+
+            <div className="bg-slate-900/70 p-3 rounded-lg border border-slate-800 space-y-1">
+              <div className="w-5 h-5 rounded-full bg-indigo-600 text-white flex items-center justify-center text-[10px] font-bold">
+                3
+              </div>
+              <p className="font-semibold text-slate-200">Search Embed</p>
+              <p className="text-[11px] text-slate-400">
+                Search for <strong>Embed</strong> & select <strong>Paste web link or embed code</strong>.
+              </p>
+            </div>
+
+            <div className="bg-slate-900/70 p-3 rounded-lg border border-slate-800 space-y-1">
+              <div className="w-5 h-5 rounded-full bg-indigo-600 text-white flex items-center justify-center text-[10px] font-bold">
+                4
+              </div>
+              <p className="font-semibold text-slate-200">Paste & Add</p>
+              <p className="text-[11px] text-slate-400">
+                Paste the link & click <strong>Add to design</strong>. Your interactive FAQ renders instantly!
+              </p>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      {/* SECTION 2: All Portable Export Formats */}
+      <div className="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+        <div>
+          <h3 className="text-base font-bold text-slate-900">Alternative Export Options</h3>
+          <p className="text-xs text-slate-500 mt-0.5">
+            Choose the format suited for your CMS, website builder, or offline archive.
+          </p>
+        </div>
+
+        {/* 4 Action Buttons */}
+        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-3">
+          {/* 1. Copy HTML (Widget Snippet) */}
+          <button
+            type="button"
+            onClick={() => handleCopy(widgetSnippet, 'html')}
+            className="flex flex-col items-center justify-center p-3.5 rounded-xl border border-indigo-200 bg-indigo-50/60 hover:bg-indigo-50 text-indigo-900 transition-all text-center group cursor-pointer"
+          >
+            <div className="w-8 h-8 rounded-lg bg-indigo-600 text-white flex items-center justify-center mb-2 shadow-xs group-hover:scale-105 transition-transform">
+              {copiedType === 'html' ? <Check className="w-4 h-4" /> : <Copy className="w-4 h-4" />}
+            </div>
+            <span className="text-xs font-bold">
+              {copiedType === 'html' ? 'Snippet Copied!' : 'Copy HTML Snippet'}
+            </span>
+            <span className="text-[10px] text-indigo-600/80 mt-0.5">
+              Direct HTML/CSS/JS snippet
+            </span>
+          </button>
+
+          {/* 2. Copy Embed Code (Iframe) */}
+          <button
+            type="button"
+            onClick={() => handleCopy(iframeCode, 'embed')}
+            className="flex flex-col items-center justify-center p-3.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 transition-all text-center group cursor-pointer"
+          >
+            <div className="w-8 h-8 rounded-lg bg-slate-800 text-white flex items-center justify-center mb-2 shadow-xs group-hover:scale-105 transition-transform">
+              {copiedType === 'embed' ? <Check className="w-4 h-4" /> : <Code className="w-4 h-4" />}
+            </div>
+            <span className="text-xs font-bold">
+              {copiedType === 'embed' ? 'Embed Code Copied!' : 'Copy Iframe Code'}
+            </span>
+            <span className="text-[10px] text-slate-500 mt-0.5">
+              Standard responsive iframe
+            </span>
+          </button>
+
+          {/* 3. Download HTML File */}
+          <button
+            type="button"
+            onClick={handleDownloadHtml}
+            className="flex flex-col items-center justify-center p-3.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 transition-all text-center group cursor-pointer"
+          >
+            <div className="w-8 h-8 rounded-lg bg-emerald-600 text-white flex items-center justify-center mb-2 shadow-xs group-hover:scale-105 transition-transform">
+              <Download className="w-4 h-4" />
+            </div>
+            <span className="text-xs font-bold">Download HTML</span>
+            <span className="text-[10px] text-slate-500 mt-0.5">
+              faq-accordion.html file
+            </span>
+          </button>
+
+          {/* 4. Export Settings JSON */}
+          <button
+            type="button"
+            onClick={onExportJson}
+            className="flex flex-col items-center justify-center p-3.5 rounded-xl border border-slate-200 bg-white hover:bg-slate-50 text-slate-800 transition-all text-center group cursor-pointer"
+          >
+            <div className="w-8 h-8 rounded-lg bg-amber-600 text-white flex items-center justify-center mb-2 shadow-xs group-hover:scale-105 transition-transform">
+              <Download className="w-4 h-4" />
+            </div>
+            <span className="text-xs font-bold">Export Settings</span>
+            <span className="text-[10px] text-slate-500 mt-0.5">
+              Backup JSON config
+            </span>
+          </button>
+        </div>
+      </div>
+
+      {/* SECTION 3: Code Inspector & Tabs */}
+      <div className="bg-slate-900 rounded-2xl overflow-hidden border border-slate-800 shadow-sm">
+        {/* Code Tabs Header */}
+        <div className="flex flex-wrap items-center justify-between px-4 py-2.5 bg-slate-950 border-b border-slate-800 gap-2">
+          <div className="flex flex-wrap items-center gap-1">
+            <button
+              type="button"
+              onClick={() => setActiveTab('canva')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                activeTab === 'canva'
+                  ? 'bg-indigo-600 text-white font-semibold'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Canva URL Link
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('widget')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                activeTab === 'widget'
+                  ? 'bg-slate-800 text-white font-semibold'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Widget Snippet
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('full')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                activeTab === 'full'
+                  ? 'bg-slate-800 text-white font-semibold'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Full HTML Document
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('iframe')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                activeTab === 'iframe'
+                  ? 'bg-slate-800 text-white font-semibold'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Iframe Embed
+            </button>
+            <button
+              type="button"
+              onClick={() => setActiveTab('json')}
+              className={`px-3 py-1.5 text-xs font-medium rounded-lg transition-colors ${
+                activeTab === 'json'
+                  ? 'bg-slate-800 text-white font-semibold'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              JSON Config
+            </button>
+          </div>
+
+          <button
+            type="button"
+            onClick={() => {
+              const code =
+                activeTab === 'canva'
+                  ? canvaEmbedUrl
+                  : activeTab === 'widget'
+                  ? widgetSnippet
+                  : activeTab === 'full'
+                  ? fullHtml
+                  : activeTab === 'iframe'
+                  ? iframeCode
+                  : jsonString;
+              handleCopy(code, 'tab-copy');
+            }}
+            className="flex items-center gap-1.5 px-3 py-1.5 text-xs font-medium text-slate-300 bg-slate-800 hover:bg-slate-700 hover:text-white rounded-lg transition-colors"
+          >
+            {copiedType === 'tab-copy' ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+            <span>{copiedType === 'tab-copy' ? 'Copied' : 'Copy Content'}</span>
+          </button>
+        </div>
+
+        {/* Code Content */}
+        <div className="p-4 max-h-96 overflow-auto font-mono text-xs text-slate-300 bg-slate-900/90 leading-relaxed whitespace-pre selection:bg-indigo-500 selection:text-white">
+          {activeTab === 'canva' && (
+            <div>
+              <span className="text-slate-500 select-none">// Automated Canva URL Link (Base64 Encoded)&#10;</span>
+              <span className="text-indigo-300 break-all">{canvaEmbedUrl}</span>
+            </div>
+          )}
+          {activeTab === 'widget' && widgetSnippet}
+          {activeTab === 'full' && fullHtml}
+          {activeTab === 'iframe' && iframeCode}
+          {activeTab === 'json' && jsonString}
+        </div>
+      </div>
+    </div>
+  );
+};
