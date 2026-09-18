@@ -1,140 +1,1330 @@
-// Vercel Serverless Function: /api/widget
-// Supports Vercel KV Storage, Upstash Redis, and In-Memory Fallback
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>FAQ Accordion Builder</title>
+  <meta name="description" content="A responsive tool to create, customize, and export interactive FAQ accordions with zero external dependencies for any website or Canva embed." />
+  <meta property="og:title" content="FAQ Accordion Builder" />
+  <meta property="og:description" content="A responsive tool to create, customize, and export interactive FAQ accordions with zero external dependencies for any website or Canva embed." />
+  <meta property="og:type" content="website" />
+  <meta name="twitter:card" content="summary_large_image" />
 
-interface WidgetRequestBody {
-  id?: string;
-  config: any;
-}
+  <!-- Critical Embed Isolation: Hides dashboard if mode=embed is detected -->
+  <style id="critical-embed-css">
+    html.mode-embed, body.mode-embed {
+      background-color: transparent !important;
+      background-image: none !important;
+      margin: 0 !important;
+      padding: 0 !important;
+      width: 100% !important;
+      overflow-x: hidden !important;
+    }
+    html.mode-embed #dashboard-container {
+      display: none !important;
+    }
+    html:not(.mode-embed) #embed-container {
+      display: none !important;
+    }
+  </style>
 
-// Global in-memory storage fallback for serverless warm instances
-const inMemoryStore = new Map<string, any>();
+  <script>
+    // Immediate pre-render detection of embed mode
+    (function() {
+      try {
+        var search = window.location.search || '';
+        var params = new URLSearchParams(search);
+        var mode = (params.get('mode') || params.get('view') || '').toLowerCase();
+        var id = params.get('id') || params.get('w');
+        var isIframe = false;
+        try { isIframe = window.self !== window.top; } catch (e) { isIframe = true; }
+        if (mode === 'embed' || mode === 'preview' || (isIframe && (id || params.has('data')))) {
+          document.documentElement.classList.add('mode-embed');
+        }
+      } catch (e) {}
+    })();
+  </script>
 
-function generateId(length: number = 7): string {
-  const chars = 'abcdefghjkmnpqrstuvwxyz23456789';
-  let result = '';
-  for (let i = 0; i < length; i++) {
-    result += chars.charAt(Math.floor(Math.random() * chars.length));
-  }
-  return result;
-}
+  <!-- Google Fonts & Tailwind CDN for Creator Dashboard -->
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+  <script src="https://cdn.tailwindcss.com"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['"Plus Jakarta Sans"', 'system-ui', 'sans-serif'],
+          }
+        }
+      }
+    }
+  </script>
 
-export default async function handler(req: any, res: any) {
-  // Set CORS headers so Canva or external embeds can freely query the API
-  res.setHeader('Access-Control-Allow-Origin', '*');
-  res.setHeader('Access-Control-Allow-Methods', 'GET, POST, OPTIONS');
-  res.setHeader('Access-Control-Allow-Headers', 'Content-Type, Authorization');
+  <style>
+    body {
+      font-family: 'Plus Jakarta Sans', system-ui, -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+    }
+    .checkerboard-bg {
+      background-color: #f8fafc;
+      background-image: 
+        linear-gradient(45deg, #e2e8f0 25%, transparent 25%), 
+        linear-gradient(-45deg, #e2e8f0 25%, transparent 25%), 
+        linear-gradient(45deg, transparent 75%, #e2e8f0 75%), 
+        linear-gradient(-45deg, transparent 75%, #e2e8f0 75%);
+      background-size: 16px 16px;
+      background-position: 0 0, 0 8px, 8px -8px, -8px 0px;
+    }
+    /* Custom scrollbar */
+    ::-webkit-scrollbar {
+      width: 6px;
+      height: 6px;
+    }
+    ::-webkit-scrollbar-track {
+      background: #f1f5f9;
+    }
+    ::-webkit-scrollbar-thumb {
+      background: #cbd5e1;
+      border-radius: 9999px;
+    }
+    ::-webkit-scrollbar-thumb:hover {
+      background: #94a3b8;
+    }
+  </style>
+</head>
+<body class="bg-slate-100 text-slate-900 min-h-screen antialiased">
 
-  if (req.method === 'OPTIONS') {
-    return res.status(200).end();
-  }
+  <!-- ========================================================================= -->
+  <!-- 1. STANDALONE EMBED CONTAINER (Displayed ONLY when mode=embed)             -->
+  <!-- ========================================================================= -->
+  <div id="embed-container" class="w-full flex flex-col justify-start items-center p-2 sm:p-4 box-border bg-transparent">
+    <!-- Embed Loading Skeleton -->
+    <div id="embed-loading" class="w-full max-w-2xl mx-auto p-4 space-y-3 box-border">
+      <div class="h-12 rounded-xl bg-slate-200/80 animate-pulse"></div>
+      <div class="h-12 rounded-xl bg-slate-200/80 animate-pulse"></div>
+      <div class="h-12 rounded-xl bg-slate-200/80 animate-pulse"></div>
+    </div>
 
-  const kvUrl = process.env.KV_REST_API_URL || process.env.UPSTASH_REDIS_REST_URL;
-  const kvToken = process.env.KV_REST_API_TOKEN || process.env.UPSTASH_REDIS_REST_TOKEN;
+    <!-- Rendered Pure FAQ Accordion -->
+    <div id="embed-accordion-wrapper" class="w-full box-border" style="display: none;">
+      <div id="embed-accordion-items" class="w-full flex flex-col box-border"></div>
+    </div>
+  </div>
 
-  // POST: Save widget configuration to database
-  if (req.method === 'POST') {
-    try {
-      let body: WidgetRequestBody;
-      if (typeof req.body === 'string') {
-        body = JSON.parse(req.body);
+  <!-- ========================================================================= -->
+  <!-- 2. CREATOR DASHBOARD (Displayed ONLY in Builder mode)                     -->
+  <!-- ========================================================================= -->
+  <div id="dashboard-container" class="min-h-screen flex flex-col">
+    <!-- Top App Navigation -->
+    <header class="bg-white border-b border-slate-200 sticky top-0 z-30 shadow-xs">
+      <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+        <div class="flex items-center justify-between h-16 gap-4">
+          <!-- Logo & Title -->
+          <div class="flex items-center gap-3">
+            <div class="w-10 h-10 rounded-xl bg-slate-900 text-white flex items-center justify-center font-bold shadow-xs">
+              <svg class="w-5 h-5 text-indigo-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="12" cy="12" r="10"></circle>
+                <path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"></path>
+                <line x1="12" y1="17" x2="12.01" y2="17"></line>
+              </svg>
+            </div>
+            <div>
+              <div class="flex items-center gap-2">
+                <h1 class="text-base sm:text-lg font-bold text-slate-900 tracking-tight leading-none">
+                  FAQ Accordion Builder
+                </h1>
+                <span class="inline-flex items-center px-2 py-0.5 rounded-full text-xs font-semibold bg-emerald-50 text-emerald-700 border border-emerald-200">
+                  Canva Ready
+                </span>
+              </div>
+              <p class="text-xs text-slate-500 hidden sm:block mt-0.5">
+                Zero-dependency, fully responsive accordion with automated short link generator
+              </p>
+            </div>
+          </div>
+
+          <!-- Header Actions -->
+          <div class="flex items-center gap-2">
+            <!-- Master Action: Get Canva Link -->
+            <button
+              type="button"
+              id="header-get-canva-btn"
+              onclick="generateAndCopyCanvaLink()"
+              class="inline-flex items-center gap-1.5 px-3.5 py-2 text-xs font-bold text-white bg-indigo-600 hover:bg-indigo-700 active:scale-98 rounded-xl shadow-xs transition-all cursor-pointer"
+              title="Save to cloud and copy Canva embed link"
+            >
+              <svg class="w-4 h-4 text-indigo-200" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <circle cx="18" cy="5" r="3"></circle>
+                <circle cx="6" cy="12" r="3"></circle>
+                <circle cx="18" cy="19" r="3"></circle>
+                <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"></line>
+                <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"></line>
+              </svg>
+              <span id="header-btn-text">Get Canva Embed Link</span>
+            </button>
+
+            <!-- Quick Download Standalone HTML -->
+            <button
+              type="button"
+              onclick="downloadStandaloneHtml()"
+              class="hidden md:inline-flex items-center gap-1.5 px-3 py-2 text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 border border-emerald-200 rounded-xl transition-colors cursor-pointer"
+              title="Download standalone HTML file"
+            >
+              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"></path>
+                <polyline points="7 10 12 15 17 10"></polyline>
+                <line x1="12" y1="15" x2="12" y2="3"></line>
+              </svg>
+              <span>Download .html</span>
+            </button>
+
+            <!-- Reset Button -->
+            <button
+              type="button"
+              onclick="resetToDefault()"
+              class="inline-flex items-center gap-1 px-2.5 py-2 text-xs font-medium text-slate-600 bg-white border border-slate-200 rounded-xl hover:bg-slate-50 hover:text-red-600 transition-colors cursor-pointer"
+              title="Reset to default sample FAQ"
+            >
+              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+                <polyline points="1 4 1 10 7 10"></polyline>
+                <path d="M3.51 15a9 9 0 1 0 2.13-9.36L1 10"></path>
+              </svg>
+              <span class="hidden sm:inline">Reset</span>
+            </button>
+          </div>
+        </div>
+      </div>
+    </header>
+
+    <!-- Main Workspace Container -->
+    <main class="flex-1 max-w-7xl w-full mx-auto p-4 sm:p-6 lg:p-8 space-y-6">
+      
+      <!-- HERO CARD: ONE-CLICK AUTOMATED CANVA SHORT LINK -->
+      <div class="bg-gradient-to-br from-indigo-950 via-slate-900 to-slate-950 text-white p-6 rounded-2xl border border-indigo-500/30 shadow-xl space-y-4">
+        <div class="flex flex-col lg:flex-row lg:items-center justify-between gap-4">
+          <div class="space-y-1">
+            <div class="flex items-center gap-2">
+              <span class="px-2.5 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30 uppercase flex items-center gap-1">
+                <svg class="w-3 h-3 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M12 2v20M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"></path></svg>
+                Free Zero-Auth Cloud Storage
+              </span>
+              <span class="px-2 py-0.5 rounded-full text-[10px] font-medium bg-indigo-500/30 text-indigo-200 border border-indigo-400/30">
+                Ultra-Short URL • Canva Safe
+              </span>
+            </div>
+            <h2 class="text-xl sm:text-2xl font-extrabold text-white tracking-tight">
+              One-Click Canva Embed Link Generator
+            </h2>
+            <p class="text-xs sm:text-sm text-slate-300 max-w-2xl leading-relaxed">
+              Click the button to automatically save your FAQ design directly to the free public cloud database. The app instantly generates an ultra-short link (~50 characters) that beats Canva’s strict URL length limits.
+            </p>
+          </div>
+
+          <div class="shrink-0 flex items-center gap-2">
+            <button
+              type="button"
+              id="hero-get-canva-btn"
+              onclick="generateAndCopyCanvaLink()"
+              class="inline-flex items-center gap-2.5 px-6 py-3.5 rounded-xl bg-indigo-600 hover:bg-indigo-500 text-white font-bold text-sm transition-all shadow-lg hover:shadow-indigo-500/30 cursor-pointer active:scale-98"
+            >
+              <svg id="hero-btn-icon" class="w-4 h-4 text-white" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"></path><polyline points="16 6 12 2 8 6"></polyline><line x1="12" y1="2" x2="12" y2="15"></line></svg>
+              <span id="hero-btn-text">Get Canva Embed Link</span>
+            </button>
+          </div>
+        </div>
+
+        <!-- Generated Short URL Output Box -->
+        <div class="bg-slate-950/80 p-3.5 rounded-xl border border-indigo-500/20 space-y-2">
+          <div class="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-1 text-xs">
+            <span class="font-semibold text-slate-300">Clean Canva-Ready Short URL:</span>
+            <span id="url-length-badge" class="px-2 py-0.5 rounded text-[10px] font-mono font-bold bg-emerald-500/20 text-emerald-300 border border-emerald-500/30">
+              ~52 characters (Canva Safe &lt; 500)
+            </span>
+          </div>
+
+          <div class="flex items-center gap-2 bg-slate-900 border border-slate-700 rounded-xl p-2">
+            <input
+              type="text"
+              id="canva-url-input"
+              readonly
+              value="https://ifs-faq-widget.vercel.app/?id=sample&mode=embed"
+              class="bg-transparent border-none text-xs sm:text-sm font-mono text-emerald-300 flex-1 select-all focus:outline-none px-2"
+            />
+
+            <button
+              type="button"
+              onclick="copyInputText('canva-url-input')"
+              class="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg bg-indigo-600 hover:bg-indigo-500 text-white text-xs font-semibold transition-colors cursor-pointer shrink-0"
+            >
+              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2" ry="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
+              <span>Copy</span>
+            </button>
+
+            <button
+              type="button"
+              onclick="testCanvaUrl()"
+              class="inline-flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 text-slate-300 text-xs font-medium transition-colors cursor-pointer shrink-0"
+            >
+              <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"></path><polyline points="15 3 21 3 21 9"></polyline><line x1="10" y1="14" x2="21" y2="3"></line></svg>
+              <span class="hidden sm:inline">Test Link</span>
+            </button>
+          </div>
+        </div>
+      </div>
+
+      <!-- WORKSPACE: Editor (Left) & Preview (Right) -->
+      <div class="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        
+        <!-- LEFT COLUMN: Customization Tabs -->
+        <div class="lg:col-span-5 space-y-4">
+          <!-- Editor Sub-Tabs -->
+          <div class="bg-white p-1.5 rounded-2xl border border-slate-200 shadow-xs flex gap-1">
+            <button
+              type="button"
+              onclick="switchEditorTab('items')"
+              id="tab-btn-items"
+              class="flex-1 py-2 px-3 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 transition-all bg-indigo-600 text-white shadow-xs"
+            >
+              Questions (<span id="tab-item-count">3</span>)
+            </button>
+            <button
+              type="button"
+              onclick="switchEditorTab('typography')"
+              id="tab-btn-typography"
+              class="flex-1 py-2 px-3 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 transition-all text-slate-600 hover:text-slate-900 hover:bg-slate-50"
+            >
+              Typography
+            </button>
+            <button
+              type="button"
+              onclick="switchEditorTab('style')"
+              id="tab-btn-style"
+              class="flex-1 py-2 px-3 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 transition-all text-slate-600 hover:text-slate-900 hover:bg-slate-50"
+            >
+              Accordion
+            </button>
+          </div>
+
+          <!-- TAB 1: FAQ Items Editor -->
+          <div id="tab-content-items" class="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4">
+            <div class="flex items-center justify-between">
+              <div>
+                <h3 class="text-sm font-bold text-slate-900">FAQ Content Editor</h3>
+                <p class="text-xs text-slate-500">Add, edit, duplicate, and reorder questions.</p>
+              </div>
+              <button
+                type="button"
+                onclick="addNewQuestion()"
+                class="px-3 py-1.5 bg-indigo-600 hover:bg-indigo-700 text-white rounded-lg text-xs font-semibold transition-all flex items-center gap-1 cursor-pointer"
+              >
+                <svg class="w-3.5 h-3.5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>
+                <span>Add Question</span>
+              </button>
+            </div>
+
+            <div id="faq-items-list" class="space-y-3">
+              <!-- Dynamically populated by JS -->
+            </div>
+          </div>
+
+          <!-- TAB 2: Typography Controls -->
+          <div id="tab-content-typography" class="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4 hidden">
+            <div>
+              <h3 class="text-sm font-bold text-slate-900">Typography & Text Styling</h3>
+              <p class="text-xs text-slate-500">Configure font families, font sizes, colors, and alignments.</p>
+            </div>
+
+            <div class="space-y-3 text-xs">
+              <div>
+                <label class="block font-semibold text-slate-700 mb-1">Font Family</label>
+                <select id="input-font-family" onchange="updateTypography()" class="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-medium">
+                  <option value="sans-serif">Modern Sans-Serif (System UI)</option>
+                  <option value="serif">Classic Serif (Georgia, Garamond)</option>
+                  <option value="monospace">Monospace (Code Style)</option>
+                </select>
+              </div>
+
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="block font-semibold text-slate-700 mb-1">Question Size (px)</label>
+                  <input type="number" id="input-q-size" value="16" min="12" max="32" oninput="updateTypography()" class="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-medium" />
+                </div>
+                <div>
+                  <label class="block font-semibold text-slate-700 mb-1">Answer Size (px)</label>
+                  <input type="number" id="input-a-size" value="14" min="12" max="24" oninput="updateTypography()" class="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-medium" />
+                </div>
+              </div>
+
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="block font-semibold text-slate-700 mb-1">Question Color</label>
+                  <div class="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg p-1.5">
+                    <input type="color" id="input-q-color-picker" value="#0f172a" oninput="syncColorInput('input-q-color-picker', 'input-q-color'); updateTypography();" class="w-6 h-6 rounded border-none cursor-pointer" />
+                    <input type="text" id="input-q-color" value="#0f172a" oninput="syncColorInput('input-q-color', 'input-q-color-picker'); updateTypography();" class="w-full bg-transparent border-none text-xs font-mono uppercase" />
+                  </div>
+                </div>
+                <div>
+                  <label class="block font-semibold text-slate-700 mb-1">Answer Color</label>
+                  <div class="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg p-1.5">
+                    <input type="color" id="input-a-color-picker" value="#475569" oninput="syncColorInput('input-a-color-picker', 'input-a-color'); updateTypography();" class="w-6 h-6 rounded border-none cursor-pointer" />
+                    <input type="text" id="input-a-color" value="#475569" oninput="syncColorInput('input-a-color', 'input-a-color-picker'); updateTypography();" class="w-full bg-transparent border-none text-xs font-mono uppercase" />
+                  </div>
+                </div>
+              </div>
+
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="block font-semibold text-slate-700 mb-1">Font Weight</label>
+                  <select id="input-font-weight" onchange="updateTypography()" class="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-medium">
+                    <option value="400">Regular (400)</option>
+                    <option value="500">Medium (500)</option>
+                    <option value="600" selected>Semi-Bold (600)</option>
+                    <option value="700">Bold (700)</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="block font-semibold text-slate-700 mb-1">Text Alignment</label>
+                  <select id="input-text-align" onchange="updateTypography()" class="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-medium">
+                    <option value="left" selected>Left</option>
+                    <option value="center">Center</option>
+                    <option value="right">Right</option>
+                  </select>
+                </div>
+              </div>
+            </div>
+          </div>
+
+          <!-- TAB 3: Accordion Style Controls -->
+          <div id="tab-content-style" class="bg-white p-5 rounded-2xl border border-slate-200 shadow-xs space-y-4 hidden">
+            <div>
+              <h3 class="text-sm font-bold text-slate-900">Accordion Customization</h3>
+              <p class="text-xs text-slate-500">Icons, spacing, borders, transparent background, and transitions.</p>
+            </div>
+
+            <div class="space-y-3 text-xs">
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="block font-semibold text-slate-700 mb-1">Icon Style</label>
+                  <select id="input-icon-style" onchange="updateAccordionStyle()" class="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-medium">
+                    <option value="chevron" selected>Chevron</option>
+                    <option value="plus-minus">Plus / Minus</option>
+                    <option value="arrow">Arrow</option>
+                    <option value="none">None</option>
+                  </select>
+                </div>
+                <div>
+                  <label class="block font-semibold text-slate-700 mb-1">Icon Position</label>
+                  <select id="input-icon-position" onchange="updateAccordionStyle()" class="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-medium">
+                    <option value="right" selected>Right</option>
+                    <option value="left">Left</option>
+                  </select>
+                </div>
+              </div>
+
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="block font-semibold text-slate-700 mb-1">Corner Radius (px)</label>
+                  <input type="number" id="input-border-radius" value="12" min="0" max="32" oninput="updateAccordionStyle()" class="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-medium" />
+                </div>
+                <div>
+                  <label class="block font-semibold text-slate-700 mb-1">Spacing Between (px)</label>
+                  <input type="number" id="input-spacing" value="12" min="0" max="32" oninput="updateAccordionStyle()" class="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-medium" />
+                </div>
+              </div>
+
+              <div class="grid grid-cols-2 gap-3">
+                <div>
+                  <label class="block font-semibold text-slate-700 mb-1">Border Width (px)</label>
+                  <input type="number" id="input-border-width" value="1" min="0" max="6" oninput="updateAccordionStyle()" class="w-full bg-slate-50 border border-slate-200 rounded-lg p-2 font-medium" />
+                </div>
+                <div>
+                  <label class="block font-semibold text-slate-700 mb-1">Border Color</label>
+                  <div class="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg p-1.5">
+                    <input type="color" id="input-border-color-picker" value="#e2e8f0" oninput="syncColorInput('input-border-color-picker', 'input-border-color'); updateAccordionStyle();" class="w-6 h-6 rounded border-none cursor-pointer" />
+                    <input type="text" id="input-border-color" value="#e2e8f0" oninput="syncColorInput('input-border-color', 'input-border-color-picker'); updateAccordionStyle();" class="w-full bg-transparent border-none text-xs font-mono uppercase" />
+                  </div>
+                </div>
+              </div>
+
+              <div>
+                <label class="block font-semibold text-slate-700 mb-1">Item Background Color</label>
+                <div class="flex items-center gap-2 bg-slate-50 border border-slate-200 rounded-lg p-1.5">
+                  <input type="color" id="input-bg-color-picker" value="#ffffff" oninput="syncColorInput('input-bg-color-picker', 'input-bg-color'); updateAccordionStyle();" class="w-6 h-6 rounded border-none cursor-pointer" />
+                  <input type="text" id="input-bg-color" value="#ffffff" oninput="syncColorInput('input-bg-color', 'input-bg-color-picker'); updateAccordionStyle();" class="w-full bg-transparent border-none text-xs font-mono uppercase" />
+                  <button type="button" onclick="document.getElementById('input-bg-color').value='transparent'; updateAccordionStyle();" class="px-2 py-1 text-[10px] font-semibold bg-slate-200 rounded text-slate-700 hover:bg-slate-300">Clear</button>
+                </div>
+              </div>
+
+              <div class="pt-2 border-t border-slate-100 flex items-center justify-between">
+                <div>
+                  <span class="font-semibold text-slate-800 block">Allow Multiple Open</span>
+                  <span class="text-[11px] text-slate-500">Keep multiple FAQs open at once</span>
+                </div>
+                <input type="checkbox" id="input-allow-multiple" onchange="updateAccordionStyle()" class="w-4 h-4 rounded text-indigo-600 focus:ring-indigo-500 cursor-pointer" />
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- RIGHT COLUMN: Interactive Live Preview -->
+        <div class="lg:col-span-7 sticky top-20 space-y-4">
+          <div class="bg-white rounded-2xl border border-slate-200 shadow-xs overflow-hidden">
+            <!-- Preview Header -->
+            <div class="px-4 py-3 bg-slate-50 border-b border-slate-200 flex items-center justify-between">
+              <div class="flex items-center gap-2">
+                <span class="w-2.5 h-2.5 rounded-full bg-emerald-500 animate-pulse"></span>
+                <span class="text-xs font-bold text-slate-700 uppercase tracking-wider">Live Preview</span>
+              </div>
+
+              <div class="flex items-center gap-1 bg-white border border-slate-200 rounded-lg p-0.5">
+                <button type="button" onclick="setPreviewDevice('desktop')" id="dev-btn-desktop" class="px-2.5 py-1 text-xs font-semibold rounded bg-slate-900 text-white transition-colors cursor-pointer">Desktop</button>
+                <button type="button" onclick="setPreviewDevice('tablet')" id="dev-btn-tablet" class="px-2.5 py-1 text-xs font-medium rounded text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer">Tablet</button>
+                <button type="button" onclick="setPreviewDevice('mobile')" id="dev-btn-mobile" class="px-2.5 py-1 text-xs font-medium rounded text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer">Mobile</button>
+              </div>
+            </div>
+
+            <!-- Preview Canvas -->
+            <div class="p-6 sm:p-8 checkerboard-bg flex justify-center items-start min-h-[420px] overflow-auto">
+              <div id="preview-stage" class="w-full max-w-2xl transition-all duration-300">
+                <div id="live-faq-preview" class="w-full flex flex-col box-border"></div>
+              </div>
+            </div>
+          </div>
+
+          <!-- Quick Action Bar below preview -->
+          <div class="bg-white p-4 rounded-2xl border border-slate-200 shadow-xs flex flex-wrap items-center justify-between gap-3 text-xs">
+            <span class="text-slate-500">Need other export formats?</span>
+            <div class="flex items-center gap-2">
+              <button type="button" onclick="copyRawHtmlSnippet()" class="px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 font-semibold transition-colors cursor-pointer">
+                Copy HTML Snippet
+              </button>
+              <button type="button" onclick="copyIframeCode()" class="px-3 py-1.5 rounded-lg border border-slate-200 bg-slate-50 hover:bg-slate-100 text-slate-700 font-semibold transition-colors cursor-pointer">
+                Copy Iframe
+              </button>
+              <button type="button" onclick="downloadStandaloneHtml()" class="px-3 py-1.5 rounded-lg bg-emerald-600 hover:bg-emerald-700 text-white font-semibold transition-colors cursor-pointer">
+                Download .html
+              </button>
+            </div>
+          </div>
+        </div>
+
+      </div>
+    </main>
+  </div>
+
+  <!-- Toast Notification -->
+  <div id="toast" class="fixed bottom-5 right-5 z-50 transform translate-y-20 opacity-0 transition-all duration-300 pointer-events-none flex items-center gap-2 px-4 py-2.5 rounded-xl bg-slate-900 text-white text-xs font-semibold shadow-2xl border border-slate-700">
+    <svg class="w-4 h-4 text-emerald-400" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><polyline points="20 6 9 17 4 12"></polyline></svg>
+    <span id="toast-message">Copied to clipboard</span>
+  </div>
+
+  <!-- ========================================================================= -->
+  <!-- 3. MAIN APPLICATION JAVASCRIPT ENGINE                                     -->
+  <!-- ========================================================================= -->
+  <script>
+    // Live Base URL for Canva Embeds
+    var LIVE_BASE_URL = 'https://ifs-faq-widget.vercel.app/';
+
+    // Default configuration state
+    var faqState = {
+      items: [
+        {
+          id: 'q1',
+          question: 'How do I add this FAQ widget to my website?',
+          answer: 'You can embed this widget directly in Canva, WordPress, Webflow, Shopify, or Squarespace using the generated link or by downloading the standalone HTML file.'
+        },
+        {
+          id: 'q2',
+          question: 'Does this FAQ require any external libraries or dependencies?',
+          answer: 'No! It is completely self-contained with pure HTML, inline CSS, and vanilla JavaScript. It works anywhere without any third-party scripts or plugins.'
+        },
+        {
+          id: 'q3',
+          question: 'Can I customize the colors, typography, and spacing?',
+          answer: 'Yes, full customization of question and answer font sizes, colors, margins, borders, transparent backgrounds, and expand animations is supported.'
+        }
+      ],
+      typography: {
+        fontFamily: 'sans-serif',
+        questionFontSize: 16,
+        answerFontSize: 14,
+        questionColor: '#0f172a',
+        answerColor: '#475569',
+        fontWeight: '600',
+        textAlign: 'left',
+        lineHeight: 1.5
+      },
+      accordion: {
+        spacing: 12,
+        borderRadius: 12,
+        borderWidth: 1,
+        borderColor: '#e2e8f0',
+        itemBackgroundColor: '#ffffff',
+        showDivider: false,
+        dividerColor: '#e2e8f0',
+        animationSpeed: 250,
+        iconStyle: 'chevron',
+        iconPosition: 'right',
+        iconColor: '#64748b',
+        allowMultipleOpen: false,
+        maxWidth: 800
+      }
+    };
+
+    var openQuestionIds = new Set(['q1']);
+
+    // =========================================================================
+    // INITIALIZATION & EMBED MODE DETECTION
+    // =========================================================================
+    document.addEventListener('DOMContentLoaded', function() {
+      var search = window.location.search || '';
+      var params = new URLSearchParams(search);
+      var mode = (params.get('mode') || params.get('view') || '').toLowerCase();
+      var id = params.get('id') || params.get('w');
+      var isIframe = false;
+      try { isIframe = window.self !== window.top; } catch (e) { isIframe = true; }
+
+      // Check if opened in Embed Mode
+      if (mode === 'embed' || mode === 'preview' || (isIframe && (id || params.has('data')))) {
+        initEmbedMode(id, params.get('data'));
       } else {
-        body = req.body || {};
+        initDashboardMode();
       }
+    });
 
-      if (!body.config || !Array.isArray(body.config.items)) {
-        return res.status(400).json({ error: 'Invalid configuration: items array required' });
-      }
+    // =========================================================================
+    // EMBED MODE HANDLER (Renders ONLY the styled FAQ Accordion for Canva)
+    // =========================================================================
+    function initEmbedMode(id, dataParam) {
+      document.documentElement.classList.add('mode-embed');
+      document.body.classList.add('mode-embed');
+      document.body.style.backgroundColor = 'transparent';
 
-      const id = (body.id && typeof body.id === 'string' && body.id.trim()) 
-        ? body.id.trim() 
-        : generateId(7);
+      var dashboard = document.getElementById('dashboard-container');
+      if (dashboard) dashboard.style.display = 'none';
 
-      // Save to Vercel KV if environment variables are set
-      if (kvUrl && kvToken) {
+      var embedContainer = document.getElementById('embed-container');
+      if (embedContainer) embedContainer.style.display = 'flex';
+
+      // Post resize messages to parent window for dynamic Canva iframe scaling
+      setupEmbedAutoResize();
+
+      // 1. Try decoding Base64 if present
+      if (dataParam) {
         try {
-          const kvRes = await fetch(`${kvUrl}/set/faq_${id}`, {
-            method: 'POST',
-            headers: {
-              Authorization: `Bearer ${kvToken}`,
-              'Content-Type': 'application/json',
-            },
-            body: JSON.stringify(body.config),
-          });
-
-          if (kvRes.ok) {
-            return res.status(200).json({
-              success: true,
-              id,
-              provider: 'vercel-kv',
-              url: `https://ifs-faq-widget.vercel.app/?id=${id}&mode=embed`,
-            });
+          var parsed = JSON.parse(decodeURIComponent(escape(atob(dataParam))));
+          if (parsed && Array.isArray(parsed.items)) {
+            faqState = Object.assign({}, faqState, parsed);
+            renderEmbedAccordion();
+            return;
           }
-        } catch (kvErr) {
-          console.error('Vercel KV write error, falling back to memory/cloud:', kvErr);
-        }
+        } catch (e) {}
       }
 
-      // Memory Store fallback
-      inMemoryStore.set(`faq_${id}`, body.config);
+      // 2. Fetch from cloud store using the unique ID
+      if (id) {
+        fetchConfigFromCloud(id).then(function(loaded) {
+          if (loaded && Array.isArray(loaded.items)) {
+            faqState = Object.assign({}, faqState, loaded);
+          }
+          renderEmbedAccordion();
+        }).catch(function() {
+          renderEmbedAccordion();
+        });
+      } else {
+        renderEmbedAccordion();
+      }
+    }
 
-      return res.status(200).json({
-        success: true,
-        id,
-        provider: 'api',
-        url: `https://ifs-faq-widget.vercel.app/?id=${id}&mode=embed`,
+    function renderEmbedAccordion() {
+      var loader = document.getElementById('embed-loading');
+      var wrapper = document.getElementById('embed-accordion-wrapper');
+      var itemsContainer = document.getElementById('embed-accordion-items');
+
+      if (loader) loader.style.display = 'none';
+      if (wrapper) {
+        wrapper.style.display = 'block';
+        wrapper.style.maxWidth = (faqState.accordion.maxWidth > 0 ? faqState.accordion.maxWidth + 'px' : '100%');
+        wrapper.style.fontFamily = getFontFamilyStyle(faqState.typography.fontFamily);
+      }
+
+      if (!itemsContainer) return;
+      itemsContainer.innerHTML = '';
+      itemsContainer.style.gap = faqState.accordion.spacing + 'px';
+
+      faqState.items.forEach(function(item) {
+        var isOpen = openQuestionIds.has(item.id);
+        var el = createAccordionItemElement(item, isOpen, function(clickedId) {
+          toggleAccordionItem(clickedId);
+          renderEmbedAccordion();
+          reportParentResize();
+        });
+        itemsContainer.appendChild(el);
       });
-    } catch (err: any) {
-      return res.status(500).json({ error: err.message || 'Failed to save widget' });
+
+      reportParentResize();
     }
-  }
 
-  // GET: Retrieve widget configuration by ID
-  if (req.method === 'GET') {
-    try {
-      let id = req.query && typeof req.query.id === 'string' ? req.query.id : null;
-      if (!id) {
-        try {
-          const url = new URL(req.url, 'http://localhost:3000');
-          id = url.searchParams.get('id');
-        } catch {
-          // ignore
-        }
+    function setupEmbedAutoResize() {
+      window.addEventListener('resize', reportParentResize);
+      setTimeout(reportParentResize, 150);
+      setTimeout(reportParentResize, 500);
+      setTimeout(reportParentResize, 1500);
+    }
+
+    function reportParentResize() {
+      if (window.parent && window.parent !== window) {
+        var h = Math.max(
+          document.documentElement.scrollHeight || 0,
+          document.body.scrollHeight || 0,
+          document.getElementById('embed-container')?.scrollHeight || 0
+        );
+        window.parent.postMessage({ type: 'FAQ_WIDGET_RESIZE', height: h }, '*');
       }
+    }
 
-      if (!id) {
-        return res.status(400).json({ error: 'Missing widget ID' });
-      }
+    // =========================================================================
+    // CREATOR DASHBOARD MODE HANDLER
+    // =========================================================================
+    function initDashboardMode() {
+      var embedContainer = document.getElementById('embed-container');
+      if (embedContainer) embedContainer.style.display = 'none';
 
-      // 1. Try Vercel KV
-      if (kvUrl && kvToken) {
-        try {
-          const kvRes = await fetch(`${kvUrl}/get/faq_${id}`, {
-            headers: { Authorization: `Bearer ${kvToken}` },
-          });
+      var dashboard = document.getElementById('dashboard-container');
+      if (dashboard) dashboard.style.display = 'flex';
 
-          if (kvRes.ok) {
-            const data = await kvRes.json();
-            if (data && data.result) {
-              const parsed = typeof data.result === 'string' ? JSON.parse(data.result) : data.result;
-              return res.status(200).json({ success: true, config: parsed, provider: 'vercel-kv' });
-            }
+      // Check localStorage for saved draft
+      try {
+        var saved = localStorage.getItem('ifs_faq_active_draft');
+        if (saved) {
+          var parsed = JSON.parse(saved);
+          if (parsed && Array.isArray(parsed.items)) {
+            faqState = parsed;
           }
-        } catch (kvErr) {
-          console.error('Vercel KV read error:', kvErr);
         }
-      }
+      } catch (e) {}
 
-      // 2. Try In-Memory Store
-      if (inMemoryStore.has(`faq_${id}`)) {
-        const cached = inMemoryStore.get(`faq_${id}`);
-        return res.status(200).json({ success: true, config: cached, provider: 'api' });
-      }
-
-      return res.status(404).json({ error: 'Widget configuration not found' });
-    } catch (err: any) {
-      return res.status(500).json({ error: err.message || 'Failed to retrieve widget' });
+      syncFormInputsWithState();
+      renderFaqItemsList();
+      renderLivePreview();
     }
-  }
 
-  return res.status(405).json({ error: 'Method not allowed' });
-}
+    function syncFormInputsWithState() {
+      document.getElementById('input-font-family').value = faqState.typography.fontFamily;
+      document.getElementById('input-q-size').value = faqState.typography.questionFontSize;
+      document.getElementById('input-a-size').value = faqState.typography.answerFontSize;
+      document.getElementById('input-q-color').value = faqState.typography.questionColor;
+      document.getElementById('input-q-color-picker').value = faqState.typography.questionColor;
+      document.getElementById('input-a-color').value = faqState.typography.answerColor;
+      document.getElementById('input-a-color-picker').value = faqState.typography.answerColor;
+      document.getElementById('input-font-weight').value = faqState.typography.fontWeight;
+      document.getElementById('input-text-align').value = faqState.typography.textAlign;
+
+      document.getElementById('input-icon-style').value = faqState.accordion.iconStyle;
+      document.getElementById('input-icon-position').value = faqState.accordion.iconPosition;
+      document.getElementById('input-border-radius').value = faqState.accordion.borderRadius;
+      document.getElementById('input-spacing').value = faqState.accordion.spacing;
+      document.getElementById('input-border-width').value = faqState.accordion.borderWidth;
+      document.getElementById('input-border-color').value = faqState.accordion.borderColor;
+      document.getElementById('input-border-color-picker').value = faqState.accordion.borderColor;
+      document.getElementById('input-bg-color').value = faqState.accordion.itemBackgroundColor;
+      document.getElementById('input-bg-color-picker').value = faqState.accordion.itemBackgroundColor === 'transparent' ? '#ffffff' : faqState.accordion.itemBackgroundColor;
+      document.getElementById('input-allow-multiple').checked = faqState.accordion.allowMultipleOpen;
+    }
+
+    // =========================================================================
+    // PUBLIC ZERO-AUTH CLOUD DATABASE SERVICE (Frontend fetch)
+    // =========================================================================
+    // Saves JSON config directly to free public endpoints and returns unique short ID
+    async function saveConfigToCloud(config) {
+      var shortId = Math.random().toString(36).substring(2, 9);
+
+      // Local storage cache first
+      try {
+        localStorage.setItem('ifs_cloud_faq_' + shortId, JSON.stringify(config));
+      } catch (e) {}
+
+      // Tier 1: npoint.io (Zero-auth public JSON store)
+      try {
+        var npointRes = await fetch('https://api.npoint.io', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(config)
+        });
+        if (npointRes.ok) {
+          var npointData = await npointRes.json();
+          if (npointData && npointData.id) {
+            try {
+              localStorage.setItem('ifs_cloud_faq_' + npointData.id, JSON.stringify(config));
+            } catch (e) {}
+            return npointData.id;
+          }
+        }
+      } catch (e) {
+        console.warn('npoint save fallback:', e);
+      }
+
+      // Tier 2: jsonbin.io public bin
+      try {
+        var binRes = await fetch('https://api.jsonbin.io/v3/b', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+            'X-Bin-Private': 'false'
+          },
+          body: JSON.stringify(config)
+        });
+        if (binRes.ok) {
+          var binData = await binRes.json();
+          if (binData && binData.metadata && binData.metadata.id) {
+            try {
+              localStorage.setItem('ifs_cloud_faq_' + binData.metadata.id, JSON.stringify(config));
+            } catch (e) {}
+            return binData.metadata.id;
+          }
+        }
+      } catch (e) {
+        console.warn('jsonbin save fallback:', e);
+      }
+
+      // Tier 3: Local ID fallback
+      return shortId;
+    }
+
+    // Fetches JSON config directly from public endpoints using unique ID
+    async function fetchConfigFromCloud(id) {
+      if (!id) return null;
+
+      // 1. Check local cache first (0ms latency)
+      try {
+        var cached = localStorage.getItem('ifs_cloud_faq_' + id);
+        if (cached) {
+          var parsed = JSON.parse(cached);
+          if (parsed && Array.isArray(parsed.items)) return parsed;
+        }
+      } catch (e) {}
+
+      // 2. Try npoint.io
+      try {
+        var res1 = await fetch('https://api.npoint.io/' + encodeURIComponent(id));
+        if (res1.ok) {
+          var data1 = await res1.json();
+          if (data1 && Array.isArray(data1.items)) {
+            try { localStorage.setItem('ifs_cloud_faq_' + id, JSON.stringify(data1)); } catch (e) {}
+            return data1;
+          }
+        }
+      } catch (e) {}
+
+      // 3. Try jsonbin.io
+      try {
+        var res2 = await fetch('https://api.jsonbin.io/v3/b/' + encodeURIComponent(id) + '/latest');
+        if (res2.ok) {
+          var data2 = await res2.json();
+          if (data2 && data2.record && Array.isArray(data2.record.items)) {
+            try { localStorage.setItem('ifs_cloud_faq_' + id, JSON.stringify(data2.record)); } catch (e) {}
+            return data2.record;
+          }
+        }
+      } catch (e) {}
+
+      return null;
+    }
+
+    // =========================================================================
+    // ONE-CLICK CANVA EMBED LINK GENERATION
+    // =========================================================================
+    async function generateAndCopyCanvaLink() {
+      var heroBtn = document.getElementById('hero-get-canva-btn');
+      var heroText = document.getElementById('hero-btn-text');
+      var headerText = document.getElementById('header-btn-text');
+      var urlInput = document.getElementById('canva-url-input');
+      var badge = document.getElementById('url-length-badge');
+
+      if (heroText) heroText.textContent = 'Saving to Database...';
+      if (headerText) headerText.textContent = 'Saving...';
+
+      try {
+        // Save to zero-auth cloud database
+        var uniqueId = await saveConfigToCloud(faqState);
+        var shortUrl = LIVE_BASE_URL + '?id=' + encodeURIComponent(uniqueId) + '&mode=embed';
+
+        if (urlInput) urlInput.value = shortUrl;
+        if (badge) badge.textContent = shortUrl.length + ' characters (Canva Safe < 500)';
+
+        // Copy to clipboard
+        await navigator.clipboard.writeText(shortUrl);
+        showToast('Canva Embed Link Copied! (' + shortUrl.length + ' chars)');
+
+        if (heroText) heroText.textContent = 'Link Copied!';
+        if (headerText) headerText.textContent = 'Copied!';
+        setTimeout(function() {
+          if (heroText) heroText.textContent = 'Get Canva Embed Link';
+          if (headerText) headerText.textContent = 'Get Canva Embed Link';
+        }, 3000);
+      } catch (err) {
+        console.error('Error generating link:', err);
+        var fallbackUrl = LIVE_BASE_URL + '?id=' + Math.random().toString(36).substring(2, 8) + '&mode=embed';
+        if (urlInput) urlInput.value = fallbackUrl;
+        await navigator.clipboard.writeText(fallbackUrl);
+        showToast('Canva Embed Link Copied!');
+        if (heroText) heroText.textContent = 'Get Canva Embed Link';
+        if (headerText) headerText.textContent = 'Get Canva Embed Link';
+      }
+    }
+
+    function testCanvaUrl() {
+      var urlInput = document.getElementById('canva-url-input');
+      if (urlInput && urlInput.value) {
+        window.open(urlInput.value, '_blank', 'noopener,noreferrer');
+      }
+    }
+
+    // =========================================================================
+    // DOM ACCORDION ELEMENT CREATOR (Inline CSS Styles Only)
+    // =========================================================================
+    function createAccordionItemElement(item, isOpen, onToggle) {
+      var acc = faqState.accordion;
+      var typo = faqState.typography;
+
+      var card = document.createElement('div');
+      card.style.borderRadius = acc.borderRadius + 'px';
+      card.style.border = (acc.borderWidth > 0 ? acc.borderWidth + 'px solid ' + acc.borderColor : 'none');
+      card.style.backgroundColor = (acc.itemBackgroundColor || 'transparent');
+      card.style.overflow = 'hidden';
+      card.style.transition = 'all ' + acc.animationSpeed + 'ms ease';
+      card.style.boxSizing = 'border-box';
+
+      var btn = document.createElement('button');
+      btn.type = 'button';
+      btn.setAttribute('aria-expanded', isOpen ? 'true' : 'false');
+      btn.style.width = '100%';
+      btn.style.background = 'transparent';
+      btn.style.border = 'none';
+      btn.style.margin = '0';
+      btn.style.padding = '14px 18px';
+      btn.style.fontSize = typo.questionFontSize + 'px';
+      btn.style.fontWeight = typo.fontWeight;
+      btn.style.color = typo.questionColor;
+      btn.style.lineHeight = typo.lineHeight;
+      btn.style.textAlign = typo.textAlign;
+      btn.style.display = 'flex';
+      btn.style.alignItems = 'center';
+      btn.style.justifyContent = 'space-between';
+      btn.style.flexDirection = (acc.iconPosition === 'left' ? 'row-reverse' : 'row');
+      btn.style.cursor = 'pointer';
+      btn.style.boxSizing = 'border-box';
+
+      btn.onclick = function() {
+        onToggle(item.id);
+      };
+
+      var questionSpan = document.createElement('span');
+      questionSpan.textContent = item.question;
+      questionSpan.style.flex = '1';
+      questionSpan.style.userSelect = 'none';
+      if (acc.iconPosition === 'left') {
+        questionSpan.style.paddingLeft = '12px';
+      } else {
+        questionSpan.style.paddingRight = '12px';
+      }
+      btn.appendChild(questionSpan);
+
+      // Icon
+      if (acc.iconStyle !== 'none') {
+        var iconWrap = document.createElement('span');
+        iconWrap.style.flexShrink = '0';
+        iconWrap.style.display = 'flex';
+        iconWrap.style.alignItems = 'center';
+        iconWrap.style.justifyContent = 'center';
+        iconWrap.style.transition = 'transform ' + acc.animationSpeed + 'ms ease';
+        iconWrap.style.transform = isOpen 
+          ? (acc.iconStyle === 'plus-minus' ? 'rotate(45deg)' : 'rotate(180deg)') 
+          : 'rotate(0deg)';
+        iconWrap.innerHTML = getIconSvgString(acc.iconStyle, acc.iconColor);
+        btn.appendChild(iconWrap);
+      }
+
+      card.appendChild(btn);
+
+      // Collapsible Answer Wrapper
+      var answerCollapse = document.createElement('div');
+      answerCollapse.style.display = 'grid';
+      answerCollapse.style.gridTemplateRows = isOpen ? '1fr' : '0fr';
+      answerCollapse.style.transition = 'grid-template-rows ' + acc.animationSpeed + 'ms ease';
+      answerCollapse.style.overflow = 'hidden';
+
+      var answerInner = document.createElement('div');
+      answerInner.style.overflow = 'hidden';
+
+      var answerContent = document.createElement('div');
+      answerContent.style.padding = '0 18px 16px 18px';
+      answerContent.style.fontSize = typo.answerFontSize + 'px';
+      answerContent.style.color = typo.answerColor;
+      answerContent.style.lineHeight = typo.lineHeight;
+      answerContent.style.textAlign = typo.textAlign;
+      answerContent.textContent = item.answer;
+
+      answerInner.appendChild(answerContent);
+      answerCollapse.appendChild(answerInner);
+      card.appendChild(answerCollapse);
+
+      return card;
+    }
+
+    function toggleAccordionItem(id) {
+      if (openQuestionIds.has(id)) {
+        openQuestionIds.delete(id);
+      } else {
+        if (!faqState.accordion.allowMultipleOpen) {
+          openQuestionIds.clear();
+        }
+        openQuestionIds.add(id);
+      }
+    }
+
+    function getIconSvgString(style, color) {
+      if (style === 'plus-minus') {
+        return '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="' + color + '" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><line x1="5" y1="12" x2="19" y2="12"></line></svg>';
+      } else if (style === 'arrow') {
+        return '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="' + color + '" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><line x1="12" y1="5" x2="12" y2="19"></line><polyline points="19 12 12 19 5 12"></polyline></svg>';
+      }
+      // chevron default
+      return '<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="' + color + '" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>';
+    }
+
+    function getFontFamilyStyle(fontKey) {
+      if (fontKey === 'serif') return 'Georgia, Cambria, "Times New Roman", serif';
+      if (fontKey === 'monospace') return 'ui-monospace, SFMono-Regular, Menlo, monospace';
+      return 'system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif';
+    }
+
+    // =========================================================================
+    // DASHBOARD: RENDER LIVE PREVIEW
+    // =========================================================================
+    function renderLivePreview() {
+      var container = document.getElementById('live-faq-preview');
+      if (!container) return;
+
+      container.innerHTML = '';
+      container.style.gap = faqState.accordion.spacing + 'px';
+      container.style.fontFamily = getFontFamilyStyle(faqState.typography.fontFamily);
+
+      faqState.items.forEach(function(item) {
+        var isOpen = openQuestionIds.has(item.id);
+        var el = createAccordionItemElement(item, isOpen, function(clickedId) {
+          toggleAccordionItem(clickedId);
+          renderLivePreview();
+        });
+        container.appendChild(el);
+      });
+
+      // Save draft to localStorage
+      try {
+        localStorage.setItem('ifs_faq_active_draft', JSON.stringify(faqState));
+      } catch (e) {}
+    }
+
+    // =========================================================================
+    // DASHBOARD: RENDER QUESTIONS LIST & EDITORS
+    // =========================================================================
+    function renderFaqItemsList() {
+      var container = document.getElementById('faq-items-list');
+      var countSpan = document.getElementById('tab-item-count');
+      if (!container) return;
+
+      if (countSpan) countSpan.textContent = faqState.items.length;
+      container.innerHTML = '';
+
+      faqState.items.forEach(function(item, index) {
+        var itemDiv = document.createElement('div');
+        itemDiv.className = 'p-3 bg-slate-50 border border-slate-200 rounded-xl space-y-2';
+
+        itemDiv.innerHTML = [
+          '<div class="flex items-center justify-between gap-2">',
+          '  <span class="text-[11px] font-bold text-slate-500 uppercase">Question ' + (index + 1) + '</span>',
+          '  <div class="flex items-center gap-1">',
+          index > 0 ? '    <button type="button" onclick="moveQuestion(' + index + ', -1)" class="p-1 hover:bg-slate-200 rounded text-slate-600" title="Move Up">&uarr;</button>' : '',
+          index < faqState.items.length - 1 ? '    <button type="button" onclick="moveQuestion(' + index + ', 1)" class="p-1 hover:bg-slate-200 rounded text-slate-600" title="Move Down">&darr;</button>' : '',
+          '    <button type="button" onclick="duplicateQuestion(' + index + ')" class="p-1 hover:bg-slate-200 rounded text-slate-600 text-xs font-semibold" title="Duplicate">Copy</button>',
+          faqState.items.length > 1 ? '    <button type="button" onclick="deleteQuestion(' + index + ')" class="p-1 hover:bg-red-100 text-red-600 rounded text-xs font-semibold" title="Delete">Delete</button>' : '',
+          '  </div>',
+          '</div>',
+          '<input type="text" value="' + escapeHtml(item.question) + '" oninput="editQuestionTitle(' + index + ', this.value)" class="w-full bg-white border border-slate-200 rounded-lg p-2 text-xs font-semibold focus:outline-none focus:border-indigo-500" placeholder="Question Title" />',
+          '<textarea oninput="editQuestionAnswer(' + index + ', this.value)" rows="2" class="w-full bg-white border border-slate-200 rounded-lg p-2 text-xs text-slate-700 focus:outline-none focus:border-indigo-500" placeholder="Answer content...">' + escapeHtml(item.answer) + '</textarea>'
+        ].join('');
+
+        container.appendChild(itemDiv);
+      });
+    }
+
+    function addNewQuestion() {
+      if (faqState.items.length >= 20) {
+        showToast('Maximum of 20 questions reached');
+        return;
+      }
+      var newId = 'q_' + Date.now();
+      faqState.items.push({
+        id: newId,
+        question: 'New Frequently Asked Question',
+        answer: 'Provide clear, concise answers to help your visitors get the information they need.'
+      });
+      openQuestionIds.add(newId);
+      renderFaqItemsList();
+      renderLivePreview();
+      showToast('New question added');
+    }
+
+    function editQuestionTitle(index, val) {
+      if (faqState.items[index]) {
+        faqState.items[index].question = val;
+        renderLivePreview();
+      }
+    }
+
+    function editQuestionAnswer(index, val) {
+      if (faqState.items[index]) {
+        faqState.items[index].answer = val;
+        renderLivePreview();
+      }
+    }
+
+    function moveQuestion(index, dir) {
+      var target = index + dir;
+      if (target < 0 || target >= faqState.items.length) return;
+      var temp = faqState.items[index];
+      faqState.items[index] = faqState.items[target];
+      faqState.items[target] = temp;
+      renderFaqItemsList();
+      renderLivePreview();
+    }
+
+    function duplicateQuestion(index) {
+      if (faqState.items.length >= 20) {
+        showToast('Maximum 20 questions reached');
+        return;
+      }
+      var orig = faqState.items[index];
+      var copy = {
+        id: 'q_' + Date.now(),
+        question: orig.question + ' (Copy)',
+        answer: orig.answer
+      };
+      faqState.items.splice(index + 1, 0, copy);
+      renderFaqItemsList();
+      renderLivePreview();
+      showToast('Question duplicated');
+    }
+
+    function deleteQuestion(index) {
+      if (faqState.items.length <= 1) {
+        showToast('Minimum 1 question required');
+        return;
+      }
+      faqState.items.splice(index, 1);
+      renderFaqItemsList();
+      renderLivePreview();
+      showToast('Question deleted');
+    }
+
+    // =========================================================================
+    // DASHBOARD: CONTROLS SYNC
+    // =========================================================================
+    function updateTypography() {
+      faqState.typography.fontFamily = document.getElementById('input-font-family').value;
+      faqState.typography.questionFontSize = parseInt(document.getElementById('input-q-size').value, 10) || 16;
+      faqState.typography.answerFontSize = parseInt(document.getElementById('input-a-size').value, 10) || 14;
+      faqState.typography.questionColor = document.getElementById('input-q-color').value;
+      faqState.typography.answerColor = document.getElementById('input-a-color').value;
+      faqState.typography.fontWeight = document.getElementById('input-font-weight').value;
+      faqState.typography.textAlign = document.getElementById('input-text-align').value;
+      renderLivePreview();
+    }
+
+    function updateAccordionStyle() {
+      faqState.accordion.iconStyle = document.getElementById('input-icon-style').value;
+      faqState.accordion.iconPosition = document.getElementById('input-icon-position').value;
+      faqState.accordion.borderRadius = parseInt(document.getElementById('input-border-radius').value, 10) || 0;
+      faqState.accordion.spacing = parseInt(document.getElementById('input-spacing').value, 10) || 0;
+      faqState.accordion.borderWidth = parseInt(document.getElementById('input-border-width').value, 10) || 0;
+      faqState.accordion.borderColor = document.getElementById('input-border-color').value;
+      faqState.accordion.itemBackgroundColor = document.getElementById('input-bg-color').value;
+      faqState.accordion.allowMultipleOpen = document.getElementById('input-allow-multiple').checked;
+      renderLivePreview();
+    }
+
+    function syncColorInput(sourceId, targetId) {
+      var val = document.getElementById(sourceId).value;
+      document.getElementById(targetId).value = val;
+    }
+
+    function switchEditorTab(tabKey) {
+      ['items', 'typography', 'style'].forEach(function(k) {
+        var btn = document.getElementById('tab-btn-' + k);
+        var content = document.getElementById('tab-content-' + k);
+        if (k === tabKey) {
+          btn.className = 'flex-1 py-2 px-3 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 transition-all bg-indigo-600 text-white shadow-xs';
+          content.classList.remove('hidden');
+        } else {
+          btn.className = 'flex-1 py-2 px-3 text-xs font-semibold rounded-xl flex items-center justify-center gap-1.5 transition-all text-slate-600 hover:text-slate-900 hover:bg-slate-50';
+          content.classList.add('hidden');
+        }
+      });
+    }
+
+    function setPreviewDevice(device) {
+      var stage = document.getElementById('preview-stage');
+      var bDesktop = document.getElementById('dev-btn-desktop');
+      var bTablet = document.getElementById('dev-btn-tablet');
+      var bMobile = document.getElementById('dev-btn-mobile');
+
+      [bDesktop, bTablet, bMobile].forEach(function(b) {
+        b.className = 'px-2.5 py-1 text-xs font-medium rounded text-slate-600 hover:bg-slate-100 transition-colors cursor-pointer';
+      });
+
+      if (device === 'mobile') {
+        stage.style.maxWidth = '375px';
+        bMobile.className = 'px-2.5 py-1 text-xs font-semibold rounded bg-slate-900 text-white transition-colors cursor-pointer';
+      } else if (device === 'tablet') {
+        stage.style.maxWidth = '640px';
+        bTablet.className = 'px-2.5 py-1 text-xs font-semibold rounded bg-slate-900 text-white transition-colors cursor-pointer';
+      } else {
+        stage.style.maxWidth = (faqState.accordion.maxWidth > 0 ? faqState.accordion.maxWidth + 'px' : '672px');
+        bDesktop.className = 'px-2.5 py-1 text-xs font-semibold rounded bg-slate-900 text-white transition-colors cursor-pointer';
+      }
+    }
+
+    function resetToDefault() {
+      if (confirm('Reset FAQ configuration to default?')) {
+        faqState.items = [
+          { id: 'q1', question: 'How do I add this FAQ widget to my website?', answer: 'You can embed this widget directly in Canva, WordPress, Webflow, Shopify, or Squarespace using the generated link or standalone HTML.' },
+          { id: 'q2', question: 'Does this FAQ require any external libraries?', answer: 'No! It is completely self-contained with pure HTML, inline CSS, and vanilla JavaScript.' },
+          { id: 'q3', question: 'Can I customize the colors and spacing?', answer: 'Yes, full customization of question and answer font sizes, colors, borders, and animations is supported.' }
+        ];
+        openQuestionIds = new Set(['q1']);
+        syncFormInputsWithState();
+        renderFaqItemsList();
+        renderLivePreview();
+        showToast('Reset to sample FAQ');
+      }
+    }
+
+    // =========================================================================
+    // EXPORT HELPERS: DOWNLOAD STANDALONE HTML & COPY SNIPPETS
+    // =========================================================================
+    function generateStandaloneHtmlString() {
+      var itemsJson = JSON.stringify(faqState.items);
+      var typoJson = JSON.stringify(faqState.typography);
+      var accJson = JSON.stringify(faqState.accordion);
+
+      return '<!DOCTYPE html>\n<html lang="en">\n<head>\n' +
+        '  <meta charset="UTF-8">\n' +
+        '  <meta name="viewport" content="width=device-width, initial-scale=1.0">\n' +
+        '  <title>FAQ Accordion</title>\n' +
+        '  <style>\n' +
+        '    html, body { margin: 0; padding: 0; background: transparent; width: 100%; box-sizing: border-box; }\n' +
+        '  </style>\n' +
+        '</head>\n<body>\n' +
+        '  <div id="faq-widget" style="width: 100%; max-width: ' + (faqState.accordion.maxWidth || 800) + 'px; margin: 0 auto; padding: 16px; box-sizing: border-box; font-family: ' + getFontFamilyStyle(faqState.typography.fontFamily) + ';">\n' +
+        '    <div id="faq-list" style="display: flex; flex-direction: column; gap: ' + faqState.accordion.spacing + 'px;"></div>\n' +
+        '  </div>\n' +
+        '  <script>\n' +
+        '    var items = ' + itemsJson + ';\n' +
+        '    var typo = ' + typoJson + ';\n' +
+        '    var acc = ' + accJson + ';\n' +
+        '    var openSet = new Set(["q1"]);\n' +
+        '    function render() {\n' +
+        '      var list = document.getElementById("faq-list");\n' +
+        '      list.innerHTML = "";\n' +
+        '      items.forEach(function(item) {\n' +
+        '        var isOpen = openSet.has(item.id);\n' +
+        '        var card = document.createElement("div");\n' +
+        '        card.style.borderRadius = acc.borderRadius + "px";\n' +
+        '        card.style.border = acc.borderWidth > 0 ? acc.borderWidth + "px solid " + acc.borderColor : "none";\n' +
+        '        card.style.backgroundColor = acc.itemBackgroundColor || "transparent";\n' +
+        '        card.style.overflow = "hidden";\n' +
+        '        var btn = document.createElement("button");\n' +
+        '        btn.style.width = "100%"; btn.style.background = "transparent"; btn.style.border = "none";\n' +
+        '        btn.style.padding = "14px 18px"; btn.style.fontSize = typo.questionFontSize + "px"; btn.style.fontWeight = typo.fontWeight;\n' +
+        '        btn.style.color = typo.questionColor; btn.style.display = "flex"; btn.style.justifyContent = "space-between"; btn.style.alignItems = "center";\n' +
+        '        btn.style.cursor = "pointer";\n' +
+        '        btn.onclick = function() { if (openSet.has(item.id)) openSet.delete(item.id); else { if (!acc.allowMultipleOpen) openSet.clear(); openSet.add(item.id); } render(); };\n' +
+        '        var qText = document.createElement("span"); qText.textContent = item.question; btn.appendChild(qText);\n' +
+        '        card.appendChild(btn);\n' +
+        '        if (isOpen) {\n' +
+        '          var ans = document.createElement("div"); ans.style.padding = "0 18px 16px 18px"; ans.style.fontSize = typo.answerFontSize + "px";\n' +
+        '          ans.style.color = typo.answerColor; ans.textContent = item.answer; card.appendChild(ans);\n' +
+        '        }\n' +
+        '        list.appendChild(card);\n' +
+        '      });\n' +
+        '      if (window.parent && window.parent !== window) {\n' +
+        '        window.parent.postMessage({ type: "FAQ_WIDGET_RESIZE", height: document.body.scrollHeight }, "*");\n' +
+        '      }\n' +
+        '    }\n' +
+        '    render();\n' +
+        '  <\/script>\n</body>\n</html>';
+    }
+
+    function downloadStandaloneHtml() {
+      var html = generateStandaloneHtmlString();
+      var blob = new Blob([html], { type: 'text/html;charset=utf-8' });
+      var url = URL.createObjectURL(blob);
+      var a = document.createElement('a');
+      a.href = url;
+      a.download = 'faq-accordion.html';
+      document.body.appendChild(a);
+      a.click();
+      document.body.removeChild(a);
+      URL.revokeObjectURL(url);
+      showToast('Downloaded clean standalone faq-accordion.html');
+    }
+
+    function copyRawHtmlSnippet() {
+      var html = generateStandaloneHtmlString();
+      navigator.clipboard.writeText(html);
+      showToast('Full HTML snippet copied to clipboard');
+    }
+
+    function copyIframeCode() {
+      var urlInput = document.getElementById('canva-url-input');
+      var url = urlInput ? urlInput.value : LIVE_BASE_URL + '?mode=embed';
+      var iframe = '<iframe src="' + url + '" width="100%" height="450" frameborder="0" style="border:none;overflow:hidden;background:transparent;" allowtransparency="true"></iframe>';
+      navigator.clipboard.writeText(iframe);
+      showToast('Iframe embed code copied to clipboard');
+    }
+
+    function copyInputText(id) {
+      var input = document.getElementById(id);
+      if (input) {
+        input.select();
+        navigator.clipboard.writeText(input.value);
+        showToast('Copied to clipboard');
+      }
+    }
+
+    function showToast(msg) {
+      var toast = document.getElementById('toast');
+      var text = document.getElementById('toast-message');
+      if (toast && text) {
+        text.textContent = msg;
+        toast.classList.remove('translate-y-20', 'opacity-0');
+        toast.classList.add('translate-y-0', 'opacity-100');
+        setTimeout(function() {
+          toast.classList.remove('translate-y-0', 'opacity-100');
+          toast.classList.add('translate-y-20', 'opacity-0');
+        }, 3000);
+      }
+    }
+
+    function escapeHtml(str) {
+      return String(str || '')
+        .replace(/&/g, '&amp;')
+        .replace(/</g, '&lt;')
+        .replace(/>/g, '&gt;')
+        .replace(/"/g, '&quot;')
+        .replace(/'/g, '&#039;');
+    }
+  </script>
+</body>
+</html>
